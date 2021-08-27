@@ -1,0 +1,950 @@
+
+
+# the purpose of this script is estimate the soil moisture and compare with observed results  
+install.packages('devtools')
+devtools::install_github("dsval/splashTools", force=TRUE)
+# devtools::install_github("dsval/rsplash")
+devtools::install_github("Elenarosquilla/rsplash")
+# source("/Users/Elena/Documents/GitHub/rsplash/R/splash.point.R")
+
+install.packages("xts")
+install.packages("tsbox")
+install.packages("tidyverse")
+install.packages("ggplot2")
+install.packages("tidyr")
+install.packages("dplyr")
+
+library(xts)
+library(rsplash)
+library(splashTools)
+library(ggplot2)
+library(tsbox)
+library(tidyr)
+library(dplyr)
+library(datasets)
+
+
+# reading Caatinga (Petrolina) environmental data 
+
+catinga_forcing <- read.table(file = "forSPLASH.csv", header = TRUE, sep  = ",", fileEncoding = "windows-1252", quote = "\"", stringsAsFactors =    FALSE, comment.char = "", na.strings = "")
+
+# formating the data
+
+ ind <- strptime(catinga_forcing$Timestamp, format= "%d/%m/%Y %H:%M",tz =  "GMT" )
+ sw_in <- apply.daily(xts(catinga_forcing$SWincoming,ind),mean)
+ tc <- apply.daily(xts(catinga_forcing$AirTemp,ind),mean)
+ pn <- apply.daily(xts(catinga_forcing$Rainfall,ind),sum)
+ ind <- as.Date(time(sw_in))
+ tc <- xts(tc,ind)
+ sw_in <- xts(sw_in,ind)
+ pn <- xts(pn,ind)
+
+ # the line below loads the soilmoisture (measured) data for comparison   
+ 
+ load(file = "soilmoisture.Rdata")
+
+ # get soil info from the site
+ lat <- -9.04 # latitude of the site
+ lon <- -40.32 # longitude of the site
+ elev <- 390 # elevation in m 
+ depth_sm <- 0.4 # the soil column that we are calculating 
+ # creating a variable with no information, to add some soil parameters
+ soil_data <- rep(0,6)
+ # replace some info with site measurements, the first one is the sand %   amount
+ # the other ones are, in this order:
+ # sand, clay, organic matter (often used in pedotransfer functions),      gravel, bulk density and depth (same as depth_sm)
+ # it would be important understand at least what each of these soil       properties 
+ soil_data[1] <- 80.0
+ soil_data[2] <- 6.0
+ soil_data[3] <- 2.0
+ soil_data[4] <- 0.0
+ soil_data[5] <- 1.25
+ soil_data[6] <- depth_sm
+
+ # soil from soilgrids
+ # soil_sg <- getSoilSite(lat,lon)
+
+ # now, let's run splash
+ # the inputs are: sw_in, tc, pn, lat, elev, slope (terrain "inclination"  ),
+ # aspect(w), soil_data, upslope area, resolution dem
+ # for some of these parameters we are using standard or zero values,      since the analysis is only for one specific point
+ #cat <- splash.point(sw_in, tc, pn, lat, elev, slope, asp, soil_data, au,  res)
+ cat <- splash.point(sw_in, tc, pn, lat, elev, 1.0, 0.0, soil_data,   10000.0, 30.0)
+
+ # estimate mm SWC from volumetric
+ # obs_sm <- xts(soil.results$Modelled, soil.results$Date)*0.4*1000
+ simulated_sm <- cat[,1]/(1000*0.4)
+ obs_sm <- xts(soil.results$Modelled, soil.results$Date)
+
+ #cat <- splash.point(sw_in, tc, pn, lat, elev, slope, asp, soil_data, au,  res) 
+ catt <- splash.point(sw_in, tc, pn, lat, elev, 0.8, 0.0, c(64,4.8,1.6,0.0  ,1.375, 0.4), 8000.0, 24.0)
+ simulated_smm <- catt[,1]/(1000*0.4)
+
+ # try to find out why we have multiplied the simulated results by "0.4    *1000" (David corrigiÃ³ a divisiÃ³n)
+ # you will need to understand the difference between correspondent water  content and volumetric water content
+ 
+ plot(obs_sm)
+ plot(simulated_sm)
+ plot(simulated_smm)
+ lines(simulated_sm, col = 'blue', ylim = c(0.0, 0.4))
+ plot(obs_sm)
+
+ meanalpha=cat$aet/cat$pet
+ plot(cat$sm_lim)
+
+
+ plot(as.numeric(simulated_smm), as.numeric(obs_sm[1:731]), ylim = c(0,0.3  ), xlim = c(0,0.3), xlab = expression(Simulated~theta~m^3~m^{-3}), ylab =  expression(Observed~theta~m^3~m^{-3}))
+ abline(0,1,col=3)
+ plot(as.numeric(simulated_sm), as.numeric(obs_sm[1:731]), ylim = c(0,0.3  ), xlim = c(0,0.3), xlab = expression(Simulated~theta~m^3~m^{-3}), ylab =  expression(Observated~theta~m^3~m^{-3}))
+ abline(0,1,col=3)
+
+ # scatter plot comparing the observation and simulation pairs against y=x
+ plot(coredata(simulated_sm), coredata(obs_sm), xlab= expression           (Simulated~theta~m^3~m^{-3}), ylab= expression(Observated~theta~m^3~m^{   -3}))
+ abline(0,1) 
+
+ # cut the remaining observations
+ obs_sm <- obs_sm ["2011-01-01/2012-12-31"]
+ mseries <- cbind(obs_sm, simulated_sm)
+ names(mseries) <- c("obs", "sim")
+ index(mseries) <- as.Date(index(mseries))
+ tidy(mseries) %>% ggplot(aes(x=index, y=value, color=series)) + geom_line  () 
+
+ mseries <- cbind(obs_sm, simulated_smm)
+ names(mseries) <- c("obs", "sim")
+ index(mseries) <- as.Date(index(mseries))
+ tidy(mseries) %>% ggplot(aes(x=index,y=value, color=series)) + geom_line  () + theme(axis.text.x=element_text(angle=30,hjust=1),legend.title =      element_blank()) + labs(x=element_blank(), y=expression(~theta~m^3~m^{-3}  ))
+
+
+
+# GPP p-model
+
+install.packages("rpmodel")
+install.packages("xts")
+
+library(xts) 
+library(rpmodel) 
+library(readxl) 
+
+# Load Petrolina's hourly data
+
+data_hourly <- read_excel("dataset_p_model_Petrolina, inde.xlsx", 
+                          col_types = c("date", "numeric", "numeric", "numeric",
+                                        "numeric"),
+                          na = "NA")
+
+obs_data_hourly <- read_excel("GPP_DT_U50.xlsx")
+
+veri <- read_excel("verification_petrolina (1).xlsx")
+
+
+# Extract the time index included in the input file to another object
+
+ind <- strptime(data_hourly$Timestamp,format='%Y-%m-%d %H:%M',tz = "GMT")
+
+# This variable should range from 0 to 1, then let's clean it
+data_hourly$fAPAR[data_hourly$fAPAR>1 | data_hourly$fAPAR<0] <- NA
+
+# Let's create a list with all inputs that are needed
+# This will also convert the hourly data into daily as a mean of the timesteps within a day 
+Data_ts <- xts(data_hourly[,2:5],ind)
+
+obs_Data_ts <- xts(obs_data_hourly[1:35088,4],ind)
+
+merge_data <- merge.xts(Data_ts, obs_Data_ts)
+
+
+Data_inputs <- list()
+Data_inputs$Tmean <- apply.daily(merge_data$AirTemp[merge_data$Swin>0], mean)
+Data_inputs$Swin <- apply.daily(merge_data$Swin, mean)
+Data_inputs$RH <- apply.daily(merge_data$RH[merge_data$Swin>0], mean)
+Data_inputs$fAPAR <- apply.daily(merge_data$fAPAR[merge_data$Swin>0], mean)
+
+
+obs_Data_inputs <- list()
+obs_Data_inputs <- apply.daily(merge_data$GPP_DT_U50[merge_data$Swin>0],mean, na.rm=TRUE)
+obs_Data_inputsgC <- (obs_Data_inputs/1000000)*12.011
+obs_Data_inputsgCh <- obs_Data_inputsgC*86400
+plot(obs_Data_inputsgCh)
+  
+
+# Now, let's calculate PPFD following that ppfd mol/m2:(1e-6)*(kfFEC*(1 - kalb_vis)*SW_daily), 
+# where kfFEC=2.04 from-photon flux-to-energy, umol/J (Meek et al., 1984), and kalb_vis = 0.03 visible light albedo (Sellers, 1985)
+Data_ppfd<-(1e-6)*(2.04 *(1 - 0.03)*Data_inputs$Rs*86400)
+
+
+# Calculate vpd (Pa): es - ea
+# It is very important to understand very well what VPD is and what is the difference between:
+# air-to-air VPD, and leaf-to-air VPD
+es<-0.6107*exp(17.27*Data_inputs$Tmean/(Data_inputs$Tmean+237.3))
+ea<-(Data_inputs$RH/100)* es 
+# calc vpd and convert to Pa
+vpd<-(es-ea)*1000.0
+
+
+# Get CO2 reference concentration (ppm) directly from an Internet link from NOAA
+# Try to remember what "Mauna Loa" means :)
+CO2_maunaLoa<-read.table('ftp://aftp.cmdl.noaa.gov/products/trends/co2/co2_mm_mlo.txt')
+CO2_maunaLoa[CO2_maunaLoa==-99.99]<-NA
+names(CO2_maunaLoa)<-c('year','month','decimal_date','average', 'interpolated','trend','#days')
+# Let's check the data and see the CO2 concentrations from Mauna Loa
+plot(CO2_maunaLoa$year,CO2_maunaLoa$average)
+# There are measured CO2 concentrations. Incredible, isn't?
+
+# Subset to 2011-2012 and interpolate to daily to match our observations
+CO2_maunaLoa<-CO2_maunaLoa[CO2_maunaLoa$year>=2011 & CO2_maunaLoa$year <=2012 ,]
+ind.month<-seq(as.Date(paste(2011,1,sep="-"),format="%Y-%j"),as.Date(paste(2012,366,sep="-"),format="%Y-%j"), by="month")
+ind.day<-seq(as.Date(paste(2011,1,sep="-"),format="%Y-%j"),as.Date(paste(2012,366,sep="-"),format="%Y-%j"), by="day")
+CO2_data<-approx(ind.month, CO2_maunaLoa$average, ind.day, method = "linear", rule=2)$y
+
+
+# Run P-model
+
+Simulated_gpp <- rpmodel(tc = as.numeric(Data_inputs$Tmean), 
+                         vpd = as.numeric(vpd),
+                         co2 = CO2_data,
+                         fapar = as.numeric(Data_inputs$fAPAR), 
+                         ppfd = as.numeric(Data_ppfd),
+                         elv = 370) #this is the elevation in Petrolina site
+
+
+Data_inputs$Tmean <- Data_inputs$Tmean["2011-01-01/2012-04-30"]
+vpd <- vpd["2011-01-01/2012-04-30"]
+CO2_data <- CO2_data[1:486]
+Data_ppfd <- Data_ppfd ["2011-01-01/2012-04-30"]
+
+Simulated_gppfapar <- rpmodel(tc = as.numeric(Data_inputs$Tmean), 
+                         vpd = as.numeric(vpd),
+                         co2 = CO2_data,
+                         fapar = as.numeric(Data_inputs$alhaja), 
+                         ppfd = as.numeric(Data_ppfd),
+                         elv = 370) #this is the elevation in Petrolina site
+
+
+# Creading gpp time series
+ind.day <- ind.day[1:486]
+Simulated_gppfapar$gpp <- xts(Simulated_gppfapar$gpp[1:length(vpd)],ind.day)
+plot(Simulated_gppfapar$gpp)
+
+
+Simulated_gppbeer <- rpmodel(tc = as.numeric(Data_inputs$Tmean), 
+                              vpd = as.numeric(vpd),
+                              co2 = CO2_data,
+                              fapar = as.numeric(beer), 
+                              ppfd = as.numeric(Data_ppfd),
+                              elv = 370) #this is the elevation in Petrolina site
+
+
+# Creading gpp time series
+ind.day <- ind.day[1:486]
+Simulated_gppbeer$gpp <- xts(Simulated_gppbeer$gpp[1:length(vpd)],ind.day)
+plot(Simulated_gppbeer$gpp)
+
+
+Simulated_gppbeerv <- rpmodel(tc = as.numeric(Data_inputs$Tmean), 
+                              vpd = as.numeric(vpd),
+                              co2 = CO2_data,
+                              fapar = as.numeric(beerv), 
+                              ppfd = as.numeric(Data_ppfd),
+                              elv = 370) #this is the elevation in Petrolina site
+
+
+# Creading gpp time series
+ind.day <- ind.day[1:486]
+Simulated_gppbeerv$gpp <- xts(Simulated_gppbeerv$gpp[1:length(vpd)],ind.day)
+plot(Simulated_gppbeerv$gpp)
+
+
+
+# soilm = as.numeric(cat$sm_lim) , meanalpha = as.numeric(cat$aet/cat$pet)
+
+Simulated_gppbn <- rpmodel(tc = as.numeric(Data_inputs$Tmean), 
+                         vpd = as.numeric(vpd),
+                         co2 = CO2_data,
+                         fapar = as.numeric(Data_inputs$fAPAR), 
+                         ppfd = as.numeric(Data_ppfd),
+                         elv = 370, soilm = as.numeric(cat$sm_lim) , meanalpha = as.numeric(cat$aet/cat$pet), do_soilmstress = TRUE) 
+
+
+
+# Creading gpp time series
+Simulated_gpp$gpp <- xts(Simulated_gpp$gpp[1:length(vpd)],ind.day)
+Simulated_gppfapar$gpp <- xts(Simulated_gppfapar$gpp[1:length(vpd)],ind.day)
+plot(Simulated_gppfapar$gpp)
+Simulated_gpp$gpp<-na.fill(Simulated_gpp$gpp, fill = mean(Simulated_gpp$gpp, na.rm=TRUE))
+# Plotting the final result of gross primary production
+plot(Simulated_gpp$gpp, col=3, main = "Simulated GPP", ylab=expression(GPP~g~C~m^-2~hr^-1))
+plot(obs_Data_inputsgCh)
+
+
+# Probando la beta de beni
+
+square<-function(x){
+  return(x^2)
+}
+square(10)
+
+install.packages("GenSA")
+
+a_theta<-0.001
+b_theta<-0.001
+AET_PET_ratio<-sum(cat$aet)/sum(cat$pet)
+th_zero<-min(simulated_smm)
+th_star<-0.6
+
+beta_zero<-a_theta+b_theta*(AET_PET_ratio)
+q<- (beta_zero-1)/(th_star-th_zero)^2
+
+beta<-function(th){
+  if(th<=th_star){
+    return(q*((th-th_star)^2)+1)
+  }
+  else {return(1)}
+}
+
+
+
+
+install.packages('devtools')
+library('devtools')
+devtools::install_github("dsval/rpmodel-grid-dev", build_vignettes = TRUE) 
+
+library(rpmodel)
+
+install.packages("ncdf4")
+install.packages("rgdal")
+install.packages("raster")
+install.packages("readr")
+
+library(ncdf4) 
+library(raster) 
+library(rgdal) 
+library(sp)
+library(readr)
+
+
+install.packages('Thermimage')
+library(Thermimage)
+
+
+install.packages("remotes")
+remotes::install_github("tremenyi/climatematchR")
+
+
+par("mar")
+par(mar=c(1,1,1,1))
+
+
+region <- readOGR(dsn=".", layer="caatinga_border")
+
+
+faparbe <- 0.95*(1-(2.71828^(-0.5*lai)))
+
+
+faparb <- brick('faparb.nc')
+
+faparbe <- brick('faparbe.tif')
+
+fapar <- brick('cropped_highRes_AVHRR_global_2003_2018_FAPAR_FLT4S.nc')
+
+lai <- brick('cropped_highRes_AVHRR_global_2003_2018_LAI_FLT4S.nc')
+
+rain <- brick('pr_20010101_20200731_BR-DWGD_UFES_UTEXAS_v_0.14.nc')
+
+
+greenfapar
+
+
+tairh <- brick('tairh.nc')
+
+qairh <- brick('qairh.nc')
+
+swh <- brick('swh.nc')
+
+elevh <- brick('elevh.nc')
+
+chelsa <- brick('chelsa.tif')
+
+
+
+lai <-crop(lai, region)
+lai <-mask (lai, region)
+
+fapar <-crop(fapar, region)
+fapar <-mask (fapar, region)
+
+faparb <-crop(faparb, region)
+faparb <-mask (faparb, region)
+
+faparbe <-crop(faparbe, region)
+faparbe <-mask (faparbe, region)
+
+tairh <-crop(tairh, region)
+tairh <-mask (tairh, region)
+
+
+qairh <-crop(qairh, region)
+qairh <-mask (qairh, region)
+
+
+swh <-crop(swh, region)
+swh <-mask (swh, region)
+
+elevh <-crop(elevh, region)
+elevh <-mask (elevh, region)
+
+rain <-crop(rain, region)
+rain <-mask (rain, region)
+
+
+rain <- rain[[730:6573]]
+
+
+# qairh qué onda
+
+qairh <- (qairh/3246)*10000000
+
+
+
+writeRaster(fapar, filename="fapar.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(faparb, filename="faparb.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(faparbe, filename="faparbe.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(lai, filename="lai.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(swh, filename="swh.tif", 
+                   options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(tairh, filename="tairh.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(qairh, filename="qairh.tif", 
+                     options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(elevh, filename="elevh.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(rain, filename="rain.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+
+lai <- brick('lai.tif')
+
+fapar <- brick('fapar.tif')
+
+faparb <- brick('faparb.tif')
+
+faparbe <- brick('faparbe.tif')
+
+tairh <- brick('tairh.tif')
+
+qairh <- brick('qairh.tif')
+
+swh <- brick('swh.tif')
+
+
+
+lai <- setZ(lai, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+fapar <- setZ(fapar, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+faparb <- setZ(faparb, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+faparbe <- setZ(faparbe, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+swh <- setZ(swh, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+tairh <- setZ(tairh, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+qairh <- setZ(qairh, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+
+
+
+fapar <- approxNA(fapar)
+
+indices <- rep (1:731, each=8)
+
+fapar1 <- zApply(fapar, indices , fun= max)
+
+
+lai <- approxNA(lai)
+
+lai1 <- zApply(lai, indices , fun= max)
+
+
+faparb <- approxNA(faparb)
+
+faparb1 <- zApply(faparb, indices , fun= max)
+
+faparb2 <- approxNA(faparb)
+
+
+faparbe <- approxNA(faparbe)
+
+faparbe1 <- zApply(faparbe, indices , fun= max)
+
+
+swh1 <- zApply(swh, indices , fun= mean)
+
+
+tairh1 <- zApply(tairh, indices , fun= mean)
+
+
+qairh1 <- zApply(qairh, indices , fun= mean)
+
+
+
+faparb <- setZ(faparb, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by=8))
+
+
+
+# Now, let's calculate PPFD following that ppfd mol/m2:(1e-6)*(kfFEC*(1 - kalb_vis)*SW_daily),
+
+# where kfFEC=2.04 from-photon flux-to-energy, umol/J (Meek et al., 1984), and kalb_vis = 0.03 visible light albedo (Sellers, 1985)
+
+ppfdh1 <- (1e-6)*(2.04 *(1 - 0.03)*swh1*86400)
+
+# Calculate vpd (Pa): es - ea
+# It is very important to understand very well what VPD is and what is the difference between:
+# air-to-air VPD, and leaf-to-air VPD
+
+es<-0.6107*exp(17.27*tairh1/(tairh1+237.3))
+
+ea<-(qairh1/100)*es 
+
+# calc vpd and convert to Pa
+
+vpdh1<-(es-ea)*1000.0
+
+
+
+
+writeRaster(fapar1, filename="fapar1.tif", 
+                     options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(faparb1, filename="faparb1.tif", 
+                    options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(faparbe1, filename="faparbe1.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(lai1, filename="lai1.tif", 
+                  options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(swh1, filename="swh1.tif", 
+                   options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(tairh1, filename="tairh1.tif", 
+                    options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(qairh1, filename="qairh1.tif", 
+                   options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(ppfdh1, filename="ppfdh1.tif", 
+                   options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(vpdh1, filename="vpdh1.tif", 
+                  options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+
+lai <- brick('lai1.tif')
+
+fapar <- brick('fapar1.tif')
+
+faparb <- brick('faparb1.tif')
+
+faparbe <- brick('faparbe1.tif')
+
+tairh <- brick('tairh1.tif')
+
+ppfdh <- brick('ppfdh1.tif')
+
+vpdh <- brick('vpdh1.tif')
+
+elevh <- brick('elevh.tif')
+
+
+
+tairh <- setZ(tairh, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by=8), 'days')
+
+
+
+# Get CO2 reference concentration (ppm) directly from an Internet link from NOAA
+# Try to remember what "Mauna Loa" means :)
+CO2_maunaLoa<-read.table('ftp://aftp.cmdl.noaa.gov/products/trends/co2/co2_mm_mlo.txt')
+CO2_maunaLoa[CO2_maunaLoa==-99.99]<-NA
+names(CO2_maunaLoa)<-c('year','month','decimal_date','average', 'interpolated','trend','#days')
+# Let's check the data and see the CO2 concentrations from Mauna Loa
+plot(CO2_maunaLoa$year,CO2_maunaLoa$average)
+# There are measured CO2 concentrations. Incredible, isn't?
+
+# Subset to 2011-2012 and interpolate to daily to match our observations
+CO2_maunaLoa<-CO2_maunaLoa[CO2_maunaLoa$year>=2003 & CO2_maunaLoa$year <=2018 ,]
+ind.month<-seq(as.Date(paste(2003,1,sep="-"),format="%Y-%j"),as.Date(paste(2018,365,sep="-"),format="%Y-%j"), by="month")
+ind.day<-seq(as.Date(paste(2003,1,sep="-"),format="%Y-%j"),as.Date(paste(2018,365,sep="-"),format="%Y-%j"), by="day")
+CO2_data<-approx(ind.month, CO2_maunaLoa$average, ind.day, method = "linear", rule=2)$y
+
+
+
+carb <- meanEveryN(CO2_data, n=8)
+                   
+extra <- CO2_data[5840:5844]                   
+
+extram <- mean(extra)
+
+carba <- c(carb, extram)
+
+
+
+beginCluster(3)
+
+
+rega <- rpmodel.grid(
+  tc = tairh,
+  vpd = vpdh,
+  co2 = carba,
+  fapar = faparb,
+  ppfd = ppfdh,
+  elev = elevh,
+  soilm = tairh/tairh,
+  meanalpha = tairh/tairh)
+
+
+
+endCluster()
+
+
+writeRaster(rega$gpp, filename="regaa.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+rega <- brick('regaa.tif')
+
+rega <- setZ(rega, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by=8), 'days')
+
+
+regam <- zApply(rega, mean)
+
+
+writeRaster(regam, filename="regam.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+regamy <- regam * 365
+
+
+writeRaster(regamy, filename="regamy.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+regamy <- brick('regamy.tif')
+
+rege <- cellStats(regamy, mean)
+
+npp <- regamy*0.46
+
+bm <- regamy*0.47
+
+
+writeRaster(npp, filename="npp.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(bm, filename="bm.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+
+fh3=as.POSIXlt(getZ(rega), format='%Y-%m-%d %H:%M',tz = "GMT")
+
+
+regamm <- brick_calc_monthly_mean (rega, fh3)
+
+
+writeRaster(regamm, filename="regamm.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+regamm <- brick('regamm.tif')
+
+
+
+rain <- brick('rain.tif')
+
+
+rain <- setZ(rain, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by='day'))
+
+
+rain <- zApply(rain, indices , fun= mean)
+
+
+rain <- setZ(rain, seq(as.Date('2003-01-01'),as.Date('2018-12-31'), by=8), 'days')
+
+
+fh2=as.POSIXlt(getZ(rain), format='%Y-%m-%d',tz = "GMT")
+
+
+rainmm <- brick_calc_monthly_mean (rain, fh2)
+
+
+rainmm <- rainmm * 365
+
+
+writeRaster(rainmm, filename="rainmm.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+rainmm <- brick('rainmm.tif')
+
+
+rainmmm <- zApply(rain, mean)
+
+rainmmm <- rainmmm * 365
+
+
+writeRaster(rainmmm, filename="rainmmm.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+
+rin <- cellStats(regamm, mean)
+
+ran <- cellStats(rainmm, mean)
+
+
+
+
+
+y1 <- ggplot(data = a) + 
+  geom_line(aes(x = index, y = rin), color='olivedrab3') + labs(x=element_blank(), y=expression(GPP~(g~C~m^-2~yr^-1)), title="Simulated GPP (regional annual average)")
+
+
+y1
+
+y2 <- ggplot(data = b) + 
+  geom_line(aes(x = Index, y = b), color='olivedrab3') + labs(x=element_blank(), y=expression(mm~yr^-1), title="Rainfall (regional annual average)")
+
+
+y2
+
+y3 <- ggplot(data = c) + 
+  geom_line(aes(x = Index, y = c), color='olivedrab3') + labs(x=element_blank(), y=expression(W~m^-2), title="Incoming shortwave radiation (regional annual average)")
+
+
+y3
+
+
+
+multiplot(y1, y2, y3, cols = 1)
+
+
+
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+
+
+
+
+
+library(raster)
+library(rgdal) 
+library(sp)
+library(car)
+
+
+#Load data
+bioma <- brick('mapabioma.tif')
+faparbmc <- brick('faparbmc.tif')
+rainmmm <- brick('rainmmm.tif')
+nature <- brick('nature.tif') 
+cropland <- brick('cropland.tif')  
+pasture <- brick('pasture.tif')
+
+
+
+#Linear models
+#No interaction
+model1 <- lm(getValues(faparbmc) ~ getValues(rainmmm) + getValues(cropland) + getValues(nature) + getValues(pasture) , na.action=na.exclude)
+r1 <- rainfall
+r1[] <- residuals.lm(model1)
+summary(model1)
+plot(r1)
+vif(model1)
+
+
+a <- brick('chelsam (1).tif')
+
+
+arainmmm <- resample(rainmmm, faparbmc, method='bilinear')
+pasture <- resample(pasture, faparbmc, method='bilinear')
+crop <- resample(crop, faparbmc, method='bilinear')
+
+
+
+writeRaster(rainmmm, filename="rainmmm.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+writeRaster(pasture, filename="pasture.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+writeRaster(natural_cover, filename="nature.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+writeRaster(cropland, filename="cropland.tif", 
+            options="INTERLEAVE=BAND", overwrite=TRUE)
+
+
+
+#Let's remake it
+OG_Data <- data.frame(fapar = as.numeric(getValues(faparbmc)),
+                      rain = as.numeric(getValues(rainmmm)), 
+                      crop = as.numeric(getValues(cropland)),
+                      nature = as.numeric(getValues(nature)),
+                      pasture = as.numeric(getValues(pasture)))
+
+
+
+
+#Check for correlation
+cor.test(OG_Data$rain,OG_Data$nature)
+cor.test(OG_Data$rain,OG_Data$crop)
+
+plot(OG_Data$nature~OG_Data$rain)
+plot(OG_Data$crop~OG_Data$rain)
+
+plot(OG_Data$nature)
+
+
+final_model <- lm(fapar ~ rain + crop + nature + pasture, na.action=na.exclude, data = OG_Data)
+summary(final_model)
+plot(final_model)
+vif(final_model)
+
+
+
+#Let's plot!
+library(ggplot2)
+
+#Make up data for prediction
+Data_to_plot <- data.frame(rain = seq(from = min(OG_Data$rain, na.rm = T), to = max(OG_Data$rain, na.rm = T),
+                                             length.out = 50000),
+                              crop = seq(from = min(OG_Data$crop, na.rm = T), to = max(OG_Data$crop, na.rm = T),
+                                             length.out = 50000),
+                              nature = seq(from = min(OG_Data$nature, na.rm = T), to = max(OG_Data$nature, na.rm = T),
+                                                  length.out = 50000),
+                              pasture = seq(from = min(OG_Data$pasture, na.rm = T), to = max(OG_Data$pasture, na.rm = T),
+                                        length.out = 50000))
+
+
+Data_to_plot <- cbind(Data_to_plot, fapar = predict(final_model,Data_to_plot))
+
+
+#Plot the model on rainfall data
+rainplot <- ggplot(aes(x=rain, y=fapar), data = Data_to_plot) + theme_classic() + 
+                  geom_point(aes(x=rain, y=fapar), data = OG_Data, size = I(1), colour = "blue", alpha = 0.5) +
+                  geom_line(size = I(3), colour = "red", alpha = 0.7) +
+                  geom_abline(intercept = final_model$coefficients[1], slope = final_model$coefficients[2], size = I(2), colour = "orange", alpha = 0.7) +
+  labs(x=expression(mm~yr^-1), y='fAPAR',title=element_blank())
+
+print(rainplot)
+
+
+#Plot the model on cropland data
+cropplot <- ggplot(aes(x=crop, y=fapar), data = Data_to_plot) + theme_classic() + 
+  geom_point(aes(x=crop, y=fapar), data = OG_Data, size = I(1), colour = "gold", alpha = 0.5) +
+  geom_line(size = I(3), colour = "red", alpha = 0.7) +
+  geom_abline(intercept = final_model$coefficients[1], slope = final_model$coefficients[3], size = I(2), colour = "orange", alpha = 0.7) +
+  labs(x='Cropland', y='fAPAR',title=element_blank())
+
+print(cropplot)
+
+
+#Plot the model on natural land data
+natureplot <- ggplot(aes(x=nature, y=fapar), data = Data_to_plot) + theme_classic() + 
+  geom_point(aes(x=nature, y=fapar), data = OG_Data, size = I(1), colour = "springgreen4", alpha = 0.5) +
+  geom_abline(intercept = final_model$coefficients[1], slope = final_model$coefficients[4], size = I(2), colour = "orange", alpha = 0.7) +
+  labs(x='Natural cover', y='fAPAR',title=element_blank())
+print(natureplot)
+
+
+#Plot the model on natural land data
+natureplot <- ggplot(aes(x=pasture, y=fapar), data = Data_to_plot) + theme_classic() + 
+  geom_point(aes(x=pasture, y=fapar), data = OG_Data, size = I(1), colour = "springgreen4", alpha = 0.5) +
+  geom_line(size = I(3), colour = "red", alpha = 0.7) +
+  geom_abline(intercept = final_model$coefficients[1], slope = final_model$coefficients[2], size = I(2), colour = "orange", alpha = 0.7) +
+  labs(x='Natural cover', y='fAPAR',title=element_blank())
+print(natureplot)
+
+
+#Plot crop and nature
+landplot <- ggplot(aes(x=nature, y=fapar), data = Data_to_plot) + theme_classic() + 
+  geom_point(aes(x=nature, y=fapar), data = OG_Data, size = I(1), colour = "springgreen4", alpha = 0.5) +
+  geom_point(aes(x=crop, y=fapar), data = OG_Data, size = I(1), colour = "yellow", alpha = 0.5) +
+  geom_point(aes(x=pasture, y=fapar), data = OG_Data, size = I(1), colour = "orange", alpha = 0.5) +
+  geom_line(size = I(3), colour = "red", alpha = 0.7)
+print(landplot)
+
+
